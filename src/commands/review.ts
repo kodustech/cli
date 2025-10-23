@@ -12,7 +12,7 @@ import {
   getHeadSha,
   resolveGitRoot,
 } from '../lib/git.js';
-import { sendReview, type SendReviewResult } from '../lib/providers.js';
+import { sendReview, type ReviewPayload, type SendReviewResult } from '../lib/providers.js';
 
 export interface ReviewCommandOptions {
   base?: string;
@@ -93,6 +93,25 @@ export async function runReview(options: ReviewCommandOptions): Promise<void> {
     changes,
   });
 
+  const payload: ReviewPayload = {
+    provider,
+    generatedAt: new Date().toISOString(),
+    baseRef,
+    branch,
+    headSha,
+    diff,
+    changedFiles: changes,
+    contextFiles: contextResult.files,
+    prompt,
+    stats: {
+      changedFiles: changedPaths.length,
+      contextFiles: contextResult.files.length,
+      followDepth,
+      maxFiles,
+      skipped: Array.from(contextResult.skipped),
+    },
+  };
+
   console.log('');
   console.log(chalk.bold('Prompt sugerido:'));
   console.log('');
@@ -113,57 +132,42 @@ export async function runReview(options: ReviewCommandOptions): Promise<void> {
   let providerResult: SendReviewResult | null = null;
   if (shouldSend) {
     console.log('');
-    console.log(chalk.cyan('[kodus] Enviando prompt ao provider...'));
+    console.log(chalk.cyan('[kodus] Enviando prompt para a API Kodus...'));
     try {
-      providerResult = await sendReview({ provider, prompt, config });
+      providerResult = await sendReview({ config, payload });
+      payload.providerResponse = providerResult;
+
       console.log(
-        chalk.green(
-          `[kodus] Resposta recebida de ${providerResult.provider} (modelo ${providerResult.model ?? 'desconhecido'}).`
-        )
+        chalk.green(`[kodus] Review enviada (status ${providerResult.status}).`)
       );
+      if (providerResult.requestId) {
+        console.log(chalk.gray(`request-id: ${providerResult.requestId}`));
+      }
+
+      const responseText = extractResponseText(providerResult);
+      if (responseText) {
+        console.log('');
+        console.log(chalk.bold('Resposta da Kodus:'));
+        console.log('');
+        console.log(responseText);
+        console.log('');
+      }
     } catch (error) {
-      console.log(
-        chalk.red(
-          `[kodus] Falha ao enviar para ${provider}: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        )
-      );
+      const message = error instanceof Error ? error.message : String(error);
+      providerResult = {
+        ok: false,
+        status: 0,
+        message,
+      };
+      payload.providerResponse = providerResult;
+      console.log(chalk.red(`[kodus] Falha ao enviar para a API: ${message}`));
     }
   }
-
-  const payload = {
-    provider,
-    generatedAt: new Date().toISOString(),
-    baseRef,
-    branch,
-    headSha,
-    diff,
-    changedFiles: changes,
-    contextFiles: contextResult.files,
-    prompt,
-    stats: {
-      changedFiles: changedPaths.length,
-      contextFiles: contextResult.files.length,
-      followDepth,
-      maxFiles,
-      skipped: Array.from(contextResult.skipped),
-    },
-    providerResponse: providerResult,
-  };
 
   if (options.output) {
     const outputPath = resolveOutputPath(options.output);
     await fs.writeFile(outputPath, JSON.stringify(payload, null, 2), 'utf8');
     console.log(chalk.green(`Payload completo salvo em ${outputPath}`));
-  }
-
-  if (providerResult?.ok && providerResult.responseText) {
-    console.log('');
-    console.log(chalk.bold('Resposta do provider:'));
-    console.log('');
-    console.log(providerResult.responseText);
-    console.log('');
   }
 }
 
@@ -213,6 +217,27 @@ function resolveSendFlag(
     throw new Error(`Valor invalido para --send: \"${value}\". Utilize true/false ou 1/0.`);
   }
   return defaultValue ?? false;
+}
+
+function extractResponseText(result: SendReviewResult | null): string | null {
+  if (!result) {
+    return null;
+  }
+  if (result.message && result.message.trim().length > 0) {
+    return result.message;
+  }
+  const data = result.data;
+  if (data === undefined || data === null) {
+    return null;
+  }
+  if (typeof data === 'string') {
+    return data;
+  }
+  try {
+    return JSON.stringify(data, null, 2);
+  } catch {
+    return String(data);
+  }
 }
 
 async function resolveBaseRef(baseOption: string | undefined, root: string): Promise<string> {

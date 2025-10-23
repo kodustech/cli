@@ -3,9 +3,13 @@ import path from 'node:path';
 import yaml from 'js-yaml';
 
 export interface ProviderConfig {
-  apiKey?: string;
   model?: string;
+}
+
+export interface KodusApiConfig {
   baseUrl?: string;
+  token?: string;
+  reviewPath?: string;
 }
 
 export interface ReviewDefaultsConfig {
@@ -22,6 +26,7 @@ export interface KodusConfig {
     claude?: ProviderConfig;
     codex?: ProviderConfig & { organization?: string };
   };
+  api?: KodusApiConfig;
 }
 
 export async function loadConfig(root: string): Promise<KodusConfig> {
@@ -81,6 +86,7 @@ async function readPackageConfig(root: string): Promise<KodusConfig | null> {
 function applyEnvironmentOverrides(config: KodusConfig): KodusConfig {
   const reviewEnv = extractReviewEnv();
   const providersEnv = extractProvidersEnv();
+  const apiEnv = extractApiEnv();
 
   return {
     ...config,
@@ -89,6 +95,7 @@ function applyEnvironmentOverrides(config: KodusConfig): KodusConfig {
       ...reviewEnv,
     },
     providers: mergeProviderConfigs(config.providers, providersEnv),
+    api: mergeApiConfig(config.api, apiEnv),
   };
 }
 
@@ -128,43 +135,20 @@ function extractReviewEnv(): ReviewDefaultsConfig {
   return review;
 }
 
-function extractProvidersEnv(): KodusConfig['providers'] {
+function extractProvidersEnv(): KodusConfig['providers'] | undefined {
   const providers: KodusConfig['providers'] = {};
 
-  const claudeEnv: ProviderConfig = {};
-  const claudeApiKey =
-    process.env.KODUS_CLAUDE_API_KEY ??
-    process.env.ANTHROPIC_API_KEY ??
-    process.env.CLAUDE_API_KEY;
-  if (claudeApiKey) {
-    claudeEnv.apiKey = claudeApiKey;
-  }
   if (process.env.KODUS_CLAUDE_MODEL) {
-    claudeEnv.model = process.env.KODUS_CLAUDE_MODEL;
-  }
-  if (process.env.KODUS_CLAUDE_BASE_URL) {
-    claudeEnv.baseUrl = process.env.KODUS_CLAUDE_BASE_URL;
-  }
-  if (Object.keys(claudeEnv).length > 0) {
     providers.claude = {
       ...(providers.claude ?? {}),
-      ...claudeEnv,
+      model: process.env.KODUS_CLAUDE_MODEL,
     };
   }
 
   const codexEnv: ProviderConfig & { organization?: string } = {};
-  const codexApiKey =
-    process.env.KODUS_CODEX_API_KEY ??
-    process.env.OPENAI_API_KEY ??
-    process.env.CODEX_API_KEY;
-  if (codexApiKey) {
-    codexEnv.apiKey = codexApiKey;
-  }
+
   if (process.env.KODUS_CODEX_MODEL) {
     codexEnv.model = process.env.KODUS_CODEX_MODEL;
-  }
-  if (process.env.KODUS_CODEX_BASE_URL) {
-    codexEnv.baseUrl = process.env.KODUS_CODEX_BASE_URL;
   }
   if (process.env.KODUS_CODEX_ORG ?? process.env.OPENAI_ORG) {
     codexEnv.organization = process.env.KODUS_CODEX_ORG ?? process.env.OPENAI_ORG;
@@ -176,7 +160,24 @@ function extractProvidersEnv(): KodusConfig['providers'] {
     };
   }
 
-  return providers;
+  return Object.keys(providers).length > 0 ? providers : undefined;
+}
+
+function extractApiEnv(): KodusApiConfig | undefined {
+  const api: KodusApiConfig = {};
+
+  if (process.env.KODUS_API_URL) {
+    api.baseUrl = process.env.KODUS_API_URL;
+  }
+  const token = process.env.KODUS_API_TOKEN ?? process.env.KODUS_TOKEN;
+  if (token) {
+    api.token = token;
+  }
+  if (process.env.KODUS_API_REVIEW_PATH) {
+    api.reviewPath = process.env.KODUS_API_REVIEW_PATH;
+  }
+
+  return Object.keys(api).length > 0 ? api : undefined;
 }
 
 function mergeProviderConfigs(
@@ -196,6 +197,19 @@ function mergeProviderConfigs(
       ...fromFile?.codex,
       ...fromEnv?.codex,
     },
+  };
+}
+
+function mergeApiConfig(
+  fromFile: KodusApiConfig | undefined,
+  fromEnv: KodusApiConfig | undefined,
+): KodusApiConfig | undefined {
+  if (!fromFile && !fromEnv) {
+    return undefined;
+  }
+  return {
+    ...fromFile,
+    ...fromEnv,
   };
 }
 
