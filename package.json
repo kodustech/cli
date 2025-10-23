@@ -1,0 +1,26 @@
+{
+  "name": "kodus-cli",
+  "version": "0.1.0",
+  "description": "CLI to streamline Kodus code reviews with Claude Code or Codex.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "kodus": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "prepare": "tsc"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^11.1.0",
+    "execa": "^8.0.1",
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.6",
+    "tsx": "^4.7.1",
+    "typescript": "^5.3.3"
+  }
+}
