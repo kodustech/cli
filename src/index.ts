@@ -12,12 +12,16 @@ program
 program
   .command('review')
   .description('Gera pedido de review a partir do diff atual')
-  .option('-b, --base <branch>', 'Branch base para comparacao', 'origin/main')
+  .option('-b, --base <branch>', 'Branch base para comparacao (padrao: upstream ou origin/main)')
   .option('-p, --provider <provider>', 'Destino do review (claude|codex)', 'claude')
   .option('--no-open', 'Nao abre o resultado automaticamente')
   .option('--output <path>', 'Arquivo para salvar o payload gerado (json)')
   .option('--max-files <number>', 'Limite de arquivos relacionados a carregar', '15')
   .option('--follow-depth <number>', 'Profundidade maxima para seguir imports relativos', '1')
+  .option(
+    '--send [mode]',
+    'Envia automaticamente o prompt para o provider configurado (use true/false).'
+  )
   .action(async (options) => {
     try {
       await runReview(options);

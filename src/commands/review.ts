@@ -3,6 +3,7 @@ import path from 'node:path';
 import chalk from 'chalk';
 import { execa } from 'execa';
 import { collectContextFiles } from '../lib/context.js';
+import { loadConfig, resolveReviewDefaults } from '../lib/config.js';
 import { buildPrompt } from '../lib/prompt.js';
 import {
   getChangedFiles,
@@ -11,6 +12,7 @@ import {
   getHeadSha,
   resolveGitRoot,
 } from '../lib/git.js';
+import { sendReview, type SendReviewResult } from '../lib/providers.js';
 
 export interface ReviewCommandOptions {
   base?: string;
@@ -19,16 +21,30 @@ export interface ReviewCommandOptions {
   output?: string;
   maxFiles?: string;
   followDepth?: string;
+  send?: string | boolean;
 }
 
 export async function runReview(options: ReviewCommandOptions): Promise<void> {
-  const provider = normalizeProvider(options.provider);
-  const maxFiles = parseIntegerOption(options.maxFiles, 15, 'max-files');
-  const followDepth = parseIntegerOption(options.followDepth, 1, 'follow-depth');
-  const shouldCopy = options.open !== false;
-
   const root = await resolveGitRoot();
-  const baseRef = await resolveBaseRef(options.base, root);
+  const config = await loadConfig(root);
+  const defaults = resolveReviewDefaults(config);
+
+  const provider = normalizeProvider(options.provider ?? defaults.provider);
+  const maxFiles = parseIntegerOption(
+    options.maxFiles,
+    defaults.maxFiles ?? 15,
+    'max-files',
+    1
+  );
+  const followDepth = parseIntegerOption(
+    options.followDepth,
+    defaults.followDepth ?? 1,
+    'follow-depth',
+    0
+  );
+  const shouldSend = resolveSendFlag(options.send, defaults.send);
+  const shouldCopy = options.open !== false;
+  const baseRef = await resolveBaseRef(options.base ?? defaults.base, root);
   const branch = await getCurrentBranch(root);
   const headSha = await getHeadSha(root);
 
@@ -77,6 +93,45 @@ export async function runReview(options: ReviewCommandOptions): Promise<void> {
     changes,
   });
 
+  console.log('');
+  console.log(chalk.bold('Prompt sugerido:'));
+  console.log('');
+  console.log(prompt);
+  console.log('');
+
+  if (shouldCopy) {
+    const copied = await copyToClipboard(prompt);
+    if (copied) {
+      console.log(chalk.green('Prompt copiado para a area de transferencia.'));
+    } else {
+      console.log(chalk.yellow('Nao foi possivel copiar automaticamente. Copie manualmente o texto acima.'));
+    }
+  } else {
+    console.log(chalk.gray('Copie o prompt acima manualmente para o provider escolhido.'));
+  }
+
+  let providerResult: SendReviewResult | null = null;
+  if (shouldSend) {
+    console.log('');
+    console.log(chalk.cyan('[kodus] Enviando prompt ao provider...'));
+    try {
+      providerResult = await sendReview({ provider, prompt, config });
+      console.log(
+        chalk.green(
+          `[kodus] Resposta recebida de ${providerResult.provider} (modelo ${providerResult.model ?? 'desconhecido'}).`
+        )
+      );
+    } catch (error) {
+      console.log(
+        chalk.red(
+          `[kodus] Falha ao enviar para ${provider}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        )
+      );
+    }
+  }
+
   const payload = {
     provider,
     generatedAt: new Date().toISOString(),
@@ -94,6 +149,7 @@ export async function runReview(options: ReviewCommandOptions): Promise<void> {
       maxFiles,
       skipped: Array.from(contextResult.skipped),
     },
+    providerResponse: providerResult,
   };
 
   if (options.output) {
@@ -102,21 +158,12 @@ export async function runReview(options: ReviewCommandOptions): Promise<void> {
     console.log(chalk.green(`Payload completo salvo em ${outputPath}`));
   }
 
-  console.log('');
-  console.log(chalk.bold('Prompt sugerido:'));
-  console.log('');
-  console.log(prompt);
-  console.log('');
-
-  if (shouldCopy) {
-    const copied = await copyToClipboard(payload.prompt);
-    if (copied) {
-      console.log(chalk.green('Prompt copiado para a area de transferencia.'));
-    } else {
-      console.log(chalk.yellow('Nao foi possivel copiar automaticamente. Copie manualmente o texto acima.'));
-    }
-  } else {
-    console.log(chalk.gray('Copie o prompt acima manualmente para o provider escolhido.'));
+  if (providerResult?.ok && providerResult.responseText) {
+    console.log('');
+    console.log(chalk.bold('Resposta do provider:'));
+    console.log('');
+    console.log(providerResult.responseText);
+    console.log('');
   }
 }
 
@@ -131,20 +178,52 @@ function normalizeProvider(provider?: string): 'claude' | 'codex' {
   return normalized;
 }
 
-function parseIntegerOption(value: string | undefined, fallback: number, flag: string): number {
+function parseIntegerOption(
+  value: string | undefined,
+  fallback: number,
+  flag: string,
+  min: number
+): number {
   if (value === undefined) {
     return fallback;
   }
   const parsed = Number.parseInt(value, 10);
-  if (Number.isNaN(parsed) || parsed <= 0) {
-    throw new Error(`Valor invalido para --${flag}: "${value}". Informe um numero inteiro positivo.`);
+  if (Number.isNaN(parsed) || parsed < min) {
+    const comparator = min === 0 ? 'inteiro maior ou igual a zero' : `inteiro maior ou igual a ${min}`;
+    throw new Error(`Valor invalido para --${flag}: "${value}". Informe um ${comparator}.`);
   }
   return parsed;
 }
 
+function resolveSendFlag(
+  value: string | boolean | undefined,
+  defaultValue: boolean | undefined
+): boolean {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'y'].includes(normalized)) {
+      return true;
+    }
+    if (['false', '0', 'no', 'n'].includes(normalized)) {
+      return false;
+    }
+    throw new Error(`Valor invalido para --send: \"${value}\". Utilize true/false ou 1/0.`);
+  }
+  return defaultValue ?? false;
+}
+
 async function resolveBaseRef(baseOption: string | undefined, root: string): Promise<string> {
   if (baseOption) {
-    return baseOption;
+    const trimmed = baseOption.trim();
+    if (!(await refExists(trimmed, root))) {
+      throw new Error(
+        `A ref base informada \"${trimmed}\" nao foi encontrada. Verifique o nome ou busque com git fetch.`
+      );
+    }
+    return trimmed;
   }
 
   const candidates: string[] = [];
