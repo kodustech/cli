@@ -39,6 +39,9 @@ O comando imprime o prompt final no terminal e, quando possivel, copia o texto p
 O CLI aceita um arquivo `kodus.config.json` ou `kodus.config.yaml` no repositorio (ou ainda um bloco `kodus` dentro do `package.json`). Exemplo em YAML:
 
 ```yaml
+api:
+  baseUrl: https://api.kodus.dev/v1/
+  reviewPath: review
 review:
   base: origin/main
   provider: claude
@@ -61,21 +64,16 @@ Variaveis de ambiente podem sobrescrever essas configuracoes. As principais sao:
 | `KODUS_REVIEW_MAX_FILES` | Limite padrao de arquivos em contexto. |
 | `KODUS_REVIEW_FOLLOW_DEPTH` | Profundidade padrao de follow-up de imports. |
 | `KODUS_REVIEW_SEND` | Define se o envio automatico deve ocorrer (true/false). |
-| `KODUS_CLAUDE_API_KEY` / `ANTHROPIC_API_KEY` | Token do Claude. |
-| `KODUS_CLAUDE_MODEL` | Modelo padrao do Claude. |
-| `KODUS_CODEX_API_KEY` / `OPENAI_API_KEY` | Token do Codex (OpenAI). |
-| `KODUS_CODEX_MODEL` | Modelo padrao do Codex. |
-| `KODUS_CODEX_BASE_URL` | Endpoint alternativo do Codex. |
-| `KODUS_CODEX_ORG` / `OPENAI_ORG` | Organizacao OpenAI, se necessario. |
+| `KODUS_API_URL` | Base URL do backend da Kodus (`https://api.kodus.dev/v1/`, por exemplo). |
+| `KODUS_API_REVIEW_PATH` | Caminho relativo/absoluto para o endpoint (`review`, `v2/review`, etc.). |
+| `KODUS_API_TOKEN` / `KODUS_TOKEN` | Token de autenticacao da Kodus. |
+| `KODUS_CLAUDE_MODEL` | Modelo preferido do Claude enviado como preferencia. |
+| `KODUS_CODEX_MODEL` | Modelo preferido do Codex enviado como preferencia. |
+| `KODUS_CODEX_ORG` / `OPENAI_ORG` | Organizacao usada na preferencia para Codex, se necessario. |
 
 ## Envio automatico
 
-Quando `--send` (ou `KODUS_REVIEW_SEND=true`) e um token valido estiver disponivel, o CLI envia o prompt diretamente ao provider selecionado:
-
-- **Claude**: usa `https://api.anthropic.com/v1/messages` com modelo configuravel (padrao `claude-3-5-sonnet-20241022`).
-- **Codex**: usa o endpoint `https://api.openai.com/v1/chat/completions` (modelo padrao `gpt-4o-mini`).
-
-As respostas sao exibidas no terminal e adicionadas ao payload salvo via `--output`.
+Quando `--send` (ou `KODUS_REVIEW_SEND=true`) e um token valido estiver disponivel, o CLI envia o diff completo (mais metadados leves como branch/base e estatisticas) para o endpoint `POST /review` da Kodus (configuravel via `api.baseUrl` e `api.reviewPath`). O backend da Kodus se encarrega de acionar o provider adequado e devolve a resposta para o CLI, que imprime o resultado e persiste os metadados no payload salvo via `--output`.
 
 ## Estrutura do payload
 

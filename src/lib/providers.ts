@@ -1,169 +1,162 @@
 import { fetch } from 'undici';
-import type { Response } from 'undici';
-import { KodusConfig } from './config.js';
-
-export interface SendReviewArgs {
-  provider: 'claude' | 'codex';
-  prompt: string;
-  config: KodusConfig;
-}
+import type { ContextFile } from './context.js';
+import type { KodusConfig } from './config.js';
+import type { GitFileChange } from './git.js';
 
 export interface SendReviewResult {
-  provider: 'claude' | 'codex';
   ok: boolean;
-  model?: string;
-  responseText?: string;
+  status: number;
   requestId?: string;
-  raw?: unknown;
+  data?: unknown;
+  message?: string;
+}
+
+export interface ReviewPayload {
+  provider: 'claude' | 'codex';
+  generatedAt: string;
+  baseRef: string;
+  branch: string | null;
+  headSha: string | null;
+  diff: string;
+  changedFiles: GitFileChange[];
+  contextFiles: ContextFile[];
+  prompt: string;
+  stats: {
+    changedFiles: number;
+    contextFiles: number;
+    followDepth: number;
+    maxFiles: number;
+    skipped: string[];
+  };
+  providerResponse?: SendReviewResult | null;
+}
+
+export interface SendReviewArgs {
+  config: KodusConfig;
+  payload: ReviewPayload;
 }
 
 export async function sendReview(args: SendReviewArgs): Promise<SendReviewResult> {
-  switch (args.provider) {
-    case 'claude':
-      return sendToClaude(args);
-    case 'codex':
-      return sendToCodex(args);
-    default:
-      throw new Error(`Provider "${args.provider}" nao suportado.`);
-  }
-}
+  const baseUrl =
+    args.config.api?.baseUrl ?? process.env.KODUS_API_URL ?? 'https://api.kodus.dev/v1/';
+  const reviewPath = args.config.api?.reviewPath ?? 'review';
+  const endpoint = buildEndpoint(baseUrl, reviewPath);
 
-async function sendToClaude(args: SendReviewArgs): Promise<SendReviewResult> {
-  const baseUrl = args.config.providers?.claude?.baseUrl ?? 'https://api.anthropic.com';
-  const apiKey =
-    args.config.providers?.claude?.apiKey ??
-    process.env.ANTHROPIC_API_KEY ??
-    process.env.CLAUDE_API_KEY;
-
-  if (!apiKey) {
-    throw new Error('Configure a variavel KODUS_CLAUDE_API_KEY ou ANTHROPIC_API_KEY para enviar ao Claude.');
+  const token = args.config.api?.token ?? process.env.KODUS_API_TOKEN ?? process.env.KODUS_TOKEN;
+  if (!token) {
+    throw new Error(
+      'Configure KODUS_API_TOKEN (ou api.token em kodus.config.*) para habilitar o envio automatico.'
+    );
   }
 
-  const model = args.config.providers?.claude?.model ?? 'claude-3-5-sonnet-20241022';
+  const rawPreferences = args.config.providers?.[args.payload.provider];
+  const preferences = normalizePreferences(rawPreferences);
 
-  const response = await fetch(`${baseUrl}/v1/messages`, {
+  const requestBody = buildRequestBody(args.payload, preferences);
+
+  const response = await fetch(endpoint, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
+      authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({
-      model,
-      max_tokens: 1024,
-      system: 'Voce e um revisor de codigo. Responda com achados priorizados e objetivos.',
-      messages: [
-        {
-          role: 'user',
-          content: args.prompt,
-        },
-      ],
-    }),
+    body: JSON.stringify(requestBody),
   });
 
+  const requestId = response.headers.get('x-request-id') ?? undefined;
+  const raw = await response.text();
+
   if (!response.ok) {
-    const errorBody = await safeReadBody(response);
-    throw new Error(`Claude retornou status ${response.status}: ${errorBody}`);
+    const message = raw || '<sem corpo>';
+    throw new Error(`Kodus API respondeu ${response.status}: ${message}`);
   }
 
-  const body = (await response.json()) as ClaudeResponse;
-  const text = extractClaudeText(body);
+  let data: unknown;
+  let message: string | undefined;
+  if (raw) {
+    try {
+      data = JSON.parse(raw);
+      message = extractMessage(data);
+    } catch {
+      data = raw;
+      message = raw;
+    }
+  }
 
   return {
-    provider: 'claude',
     ok: true,
-    model: body.model,
-    responseText: text,
-    requestId: response.headers.get('x-request-id') ?? undefined,
-    raw: body,
+    status: response.status,
+    requestId,
+    data,
+    message,
   };
 }
 
-async function sendToCodex(args: SendReviewArgs): Promise<SendReviewResult> {
-  const baseUrl = args.config.providers?.codex?.baseUrl ?? 'https://api.openai.com';
-  const apiKey =
-    args.config.providers?.codex?.apiKey ??
-    process.env.OPENAI_API_KEY ??
-    process.env.CODEX_API_KEY;
-
-  if (!apiKey) {
-    throw new Error('Configure a variavel KODUS_CODEX_API_KEY ou OPENAI_API_KEY para enviar ao Codex.');
-  }
-
-  const model = args.config.providers?.codex?.model ?? 'gpt-4o-mini';
-
-  const response = await fetch(`${baseUrl}/v1/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${apiKey}`,
-      ...(args.config.providers?.codex?.organization
-        ? { 'OpenAI-Organization': args.config.providers.codex.organization }
-        : {}),
+function buildRequestBody(
+  payload: ReviewPayload,
+  preferences: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    provider: payload.provider,
+    diff: payload.diff,
+    meta: {
+      generatedAt: payload.generatedAt,
+      baseRef: payload.baseRef,
+      branch: payload.branch,
+      headSha: payload.headSha,
+      stats: payload.stats,
     },
-    body: JSON.stringify({
-      model,
-      messages: [
-        {
-          role: 'system',
-          content:
-            'Voce e um revisor de codigo. Analise o prompt fornecido e responda apenas com problemas e sugestoes objetivas.',
-        },
-        {
-          role: 'user',
-          content: args.prompt,
-        },
-      ],
-      temperature: 0.2,
-    }),
-  });
-
-  if (!response.ok) {
-    const errorBody = await safeReadBody(response);
-    throw new Error(`Codex retornou status ${response.status}: ${errorBody}`);
-  }
-
-  const body = (await response.json()) as OpenAIResponse;
-  const choice = body.choices?.[0];
-  const text = choice?.message?.content ?? '';
-
-  return {
-    provider: 'codex',
-    ok: true,
-    model: body.model ?? model,
-    responseText: text,
-    requestId: body.id,
-    raw: body,
   };
-}
 
-async function safeReadBody(response: Response): Promise<string> {
-  try {
-    const text = await response.text();
-    return text.slice(0, 2000);
-  } catch {
-    return '<sem corpo>';
+  if (preferences && Object.keys(preferences).length > 0) {
+    body.preferences = preferences;
   }
+
+  return body;
 }
 
-interface ClaudeResponse {
-  id: string;
-  model: string;
-  content: Array<{ type: string; text?: string }>;
-}
-
-interface OpenAIResponse {
-  id: string;
-  model?: string;
-  choices?: Array<{ message?: { role?: string; content?: string } }>;
-}
-
-function extractClaudeText(body: ClaudeResponse): string {
-  if (!Array.isArray(body.content)) {
-    return '';
+function buildEndpoint(baseUrl: string, reviewPath: string): string {
+  if (/^https?:\/\//i.test(reviewPath)) {
+    return reviewPath;
   }
-  return body.content
-    .map((entry) => (entry.type === 'text' ? entry.text ?? '' : ''))
-    .join('\n')
-    .trim();
+  const normalizedBase = ensureTrailingSlash(baseUrl);
+  const relativePath = reviewPath.replace(/^\//, '');
+  return new URL(relativePath, normalizedBase).toString();
+}
+
+function ensureTrailingSlash(value: string): string {
+  return value.endsWith('/') ? value : `${value}/`;
+}
+
+function normalizePreferences(source: unknown): Record<string, unknown> | undefined {
+  if (!source || typeof source !== 'object') {
+    return undefined;
+  }
+
+  const entries = Object.entries(source as Record<string, unknown>).filter(
+    ([, value]) => value !== undefined
+  );
+
+  if (entries.length === 0) {
+    return undefined;
+  }
+
+  return Object.fromEntries(entries);
+}
+
+function extractMessage(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== 'object') {
+    return undefined;
+  }
+
+  const candidate = payload as Record<string, unknown>;
+  const fields = ['review', 'result', 'message', 'summary', 'content'];
+  for (const field of fields) {
+    const value = candidate[field];
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value;
+    }
+  }
+
+  return undefined;
 }
