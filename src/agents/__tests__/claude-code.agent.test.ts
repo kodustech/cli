@@ -21,9 +21,9 @@ describe('ClaudeCodeAgent.parseHookEvent', () => {
     expect(event!.type).toBe('SessionEnd');
   });
 
-  it('maps stop to SessionEnd', () => {
+  it('maps stop to TurnEnd', () => {
     const event = agent.parseHookEvent('stop', { session_id: 'sess-1' });
-    expect(event!.type).toBe('SessionEnd');
+    expect(event!.type).toBe('TurnEnd');
   });
 
   it('maps user-prompt-submit to TurnStart', () => {

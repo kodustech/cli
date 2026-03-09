@@ -12,7 +12,7 @@ import type {
 const HOOK_TO_EVENT_TYPE: Record<ClaudeCodeHookEvent, EventType> = {
   'session-start': 'SessionStart',
   'session-end': 'SessionEnd',
-  'stop': 'SessionEnd',
+  'stop': 'TurnEnd',
   'user-prompt-submit': 'TurnStart',
   'pre-task': 'SubagentStart',
   'post-task': 'SubagentEnd',
