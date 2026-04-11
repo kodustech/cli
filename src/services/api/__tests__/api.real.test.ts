@@ -10,6 +10,19 @@ const configMocks = vi.hoisted(() => ({
     loadConfig: vi.fn(),
 }));
 
+// api-core.ts now uses undici's fetch (not Node's global) so the custom
+// long-lived Agent is actually honored. Tests must mock the undici module.
+const undiciMocks = vi.hoisted(() => ({
+    fetch: vi.fn(),
+}));
+
+vi.mock('undici', () => ({
+    Agent: class MockAgent {
+        constructor(_opts?: unknown) {}
+    },
+    fetch: undiciMocks.fetch,
+}));
+
 vi.mock('../../../utils/device.js', () => ({
     getDeviceIdentity: deviceMocks.getDeviceIdentity,
     updateDeviceToken: deviceMocks.updateDeviceToken,
@@ -27,8 +40,8 @@ describe('RealApi request headers', () => {
     beforeEach(() => {
         _resetConfigCache();
         configMocks.loadConfig.mockResolvedValue(null);
-        fetchMock = vi.fn();
-        vi.stubGlobal('fetch', fetchMock as any);
+        fetchMock = undiciMocks.fetch;
+        fetchMock.mockReset();
         deviceMocks.getDeviceIdentity.mockResolvedValue({
             deviceId: '11111111-1111-4111-8111-111111111111',
             deviceToken: 'device-token-123',
@@ -160,8 +173,8 @@ describe('RealApi review.getPullRequestSuggestions', () => {
     beforeEach(() => {
         _resetConfigCache();
         configMocks.loadConfig.mockResolvedValue(null);
-        fetchMock = vi.fn();
-        vi.stubGlobal('fetch', fetchMock as any);
+        fetchMock = undiciMocks.fetch;
+        fetchMock.mockReset();
         deviceMocks.getDeviceIdentity.mockResolvedValue({
             deviceId: '11111111-1111-4111-8111-111111111111',
         });
@@ -270,8 +283,8 @@ describe('RealApi config repository methods', () => {
     beforeEach(() => {
         _resetConfigCache();
         configMocks.loadConfig.mockResolvedValue(null);
-        fetchMock = vi.fn();
-        vi.stubGlobal('fetch', fetchMock as any);
+        fetchMock = undiciMocks.fetch;
+        fetchMock.mockReset();
         deviceMocks.getDeviceIdentity.mockResolvedValue({
             deviceId: '11111111-1111-4111-8111-111111111111',
         });
@@ -714,8 +727,8 @@ describe('RealApi review.analyze auth mode', () => {
     beforeEach(() => {
         _resetConfigCache();
         configMocks.loadConfig.mockResolvedValue(null);
-        fetchMock = vi.fn();
-        vi.stubGlobal('fetch', fetchMock as any);
+        fetchMock = undiciMocks.fetch;
+        fetchMock.mockReset();
         deviceMocks.getDeviceIdentity.mockResolvedValue({
             deviceId: '11111111-1111-4111-8111-111111111111',
         });
@@ -765,8 +778,8 @@ describe('Cloudflare Access headers from config', () => {
     beforeEach(() => {
         _resetConfigCache();
         configMocks.loadConfig.mockResolvedValue(null);
-        fetchMock = vi.fn();
-        vi.stubGlobal('fetch', fetchMock as any);
+        fetchMock = undiciMocks.fetch;
+        fetchMock.mockReset();
         deviceMocks.getDeviceIdentity.mockResolvedValue({
             deviceId: '11111111-1111-4111-8111-111111111111',
         });
@@ -881,8 +894,8 @@ describe('API base URL from config', () => {
     beforeEach(() => {
         _resetConfigCache();
         configMocks.loadConfig.mockResolvedValue(null);
-        fetchMock = vi.fn();
-        vi.stubGlobal('fetch', fetchMock as any);
+        fetchMock = undiciMocks.fetch;
+        fetchMock.mockReset();
         deviceMocks.getDeviceIdentity.mockResolvedValue({
             deviceId: '11111111-1111-4111-8111-111111111111',
         });

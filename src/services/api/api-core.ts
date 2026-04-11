@@ -1,3 +1,4 @@
+import { Agent, fetch as undiciFetch } from 'undici';
 import { ApiError } from '../../types/errors.js';
 import { loadConfig, type CliConfig } from '../../utils/config.js';
 import { getDeviceIdentity, updateDeviceToken } from '../../utils/device.js';
@@ -74,7 +75,37 @@ export async function resolveApiBaseUrl(): Promise<string> {
     return defaultUrl;
 }
 
-const REQUEST_TIMEOUT_MS = 20 * 60 * 1000;
+// Default 60 minutes — covers large branch reviews that split into many
+// agent batches (e.g. ~6 batches × 5 min each). Overridable via
+// KODUS_REQUEST_TIMEOUT_MIN (in minutes) for extreme cases.
+const DEFAULT_REQUEST_TIMEOUT_MIN = 60;
+const parsedTimeoutMin = Number.parseInt(
+    process.env.KODUS_REQUEST_TIMEOUT_MIN ?? '',
+    10,
+);
+const REQUEST_TIMEOUT_MIN =
+    Number.isFinite(parsedTimeoutMin) && parsedTimeoutMin > 0
+        ? parsedTimeoutMin
+        : DEFAULT_REQUEST_TIMEOUT_MIN;
+const REQUEST_TIMEOUT_MS = REQUEST_TIMEOUT_MIN * 60 * 1000;
+
+// Undici (the HTTP client used by Node's global fetch) defaults both
+// headersTimeout and bodyTimeout to 5 minutes. Long CLI reviews of large
+// branches easily exceed that, the client silently aborts, and the retry
+// wrapper fires a new request — causing a retry storm where the backend
+// processes the same review multiple times in parallel.
+//
+// We use undici's own fetch (imported from the installed undici package)
+// with a dispatcher whose timeouts match REQUEST_TIMEOUT_MS. Passing a
+// dispatcher to Node's global fetch does NOT work reliably: Node's bundled
+// undici is a different module instance than the one installed here, so
+// the Agent we create is not honored by the global fetch.
+const longLivedDispatcher = new Agent({
+    headersTimeout: REQUEST_TIMEOUT_MS,
+    bodyTimeout: REQUEST_TIMEOUT_MS,
+    keepAliveTimeout: REQUEST_TIMEOUT_MS,
+    keepAliveMaxTimeout: REQUEST_TIMEOUT_MS,
+});
 
 /**
  * Returns Cloudflare Access headers when configured.
@@ -238,9 +269,10 @@ export async function request<T>(
 
     let response: Response;
     try {
-        response = await fetch(url, {
+        const undiciOptions: any = {
             ...options,
             signal: controller.signal,
+            dispatcher: longLivedDispatcher,
             headers: {
                 'Content-Type': 'application/json',
                 ...cfHeaders,
@@ -252,7 +284,11 @@ export async function request<T>(
                     : {}),
                 ...options.headers,
             },
-        });
+        };
+        response = (await undiciFetch(
+            url,
+            undiciOptions,
+        )) as unknown as Response;
     } catch (error) {
         clearTimeout(timeout);
         if (error instanceof DOMException && error.name === 'AbortError') {
@@ -379,9 +415,10 @@ export async function requestBinary(
 
     let response: Response;
     try {
-        response = await fetch(url, {
+        const undiciOptions: any = {
             ...options,
             signal: controller.signal,
+            dispatcher: longLivedDispatcher,
             headers: {
                 ...cfHeaders,
                 ...(deviceIdentity?.deviceId
@@ -392,7 +429,11 @@ export async function requestBinary(
                     : {}),
                 ...options.headers,
             },
-        });
+        };
+        response = (await undiciFetch(
+            url,
+            undiciOptions,
+        )) as unknown as Response;
     } catch (error) {
         clearTimeout(timeout);
         if (error instanceof DOMException && error.name === 'AbortError') {
